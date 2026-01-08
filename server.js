@@ -25,13 +25,31 @@ const wss = new WebSocket.Server({ server });
 const CONFIG = {
   // Binance public WebSocket for market data
   WS_URL: 'wss://stream.binance.com:9443/ws',
-  INSTRUMENTS: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'SUIUSDT'],
+  // Top 10 crypto trading pairs
+  INSTRUMENTS: [
+    'BTCUSDT',   // Bitcoin
+    'ETHUSDT',   // Ethereum
+    'BNBUSDT',   // Binance Coin
+    'XRPUSDT',   // Ripple
+    'ADAUSDT',   // Cardano
+    'SOLUSDT',   // Solana
+    'DOGEUSDT',  // Dogecoin
+    'DOTUSDT',   // Polkadot
+    'MATICUSDT', // Polygon
+    'LTCUSDT'    // Litecoin
+  ],
   // Display names mapping
   INSTRUMENT_DISPLAY: {
     'BTCUSDT': 'BTC_USDT',
     'ETHUSDT': 'ETH_USDT',
+    'BNBUSDT': 'BNB_USDT',
+    'XRPUSDT': 'XRP_USDT',
+    'ADAUSDT': 'ADA_USDT',
     'SOLUSDT': 'SOL_USDT',
-    'SUIUSDT': 'SUI_USDT'
+    'DOGEUSDT': 'DOGE_USDT',
+    'DOTUSDT': 'DOT_USDT',
+    'MATICUSDT': 'MATIC_USDT',
+    'LTCUSDT': 'LTC_USDT'
   },
   TIMEFRAMES: ['1m', '5m', '15m', '1h', '4h'],
   // Binance timeframe mapping
@@ -741,7 +759,8 @@ server.listen(PORT, () => {
 ║  WebSocket:    ws://localhost:${PORT}                            ║
 ║  Health:       http://localhost:${PORT}/health                   ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Instruments:  BTC, ETH, SOL, SUI (USDT pairs)                ║
+║  Instruments:  Top 10 Pairs (USDT)                            ║
+║  BTC, ETH, BNB, XRP, ADA, SOL, DOGE, DOT, MATIC, LTC          ║
 ║  Timeframes:   1m, 5m, 15m, 1h, 4h                            ║
 ║  Data Source:  Binance Public API                             ║
 ╚═══════════════════════════════════════════════════════════════╝
