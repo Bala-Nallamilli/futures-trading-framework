@@ -10,8 +10,110 @@ const WebSocket = require('ws');
 const cors = require('cors');
 const http = require('http');
 const https = require('https');
+const Redis = require('ioredis');
 
 const app = express();
+
+// Redis client for caching
+const redis = new Redis({
+  host: 'localhost',
+  port: 6379,
+  retryStrategy: (times) => {
+    if (times > 3) {
+      console.log('⚠️ Redis unavailable - running without cache');
+      return null; // Stop retrying
+    }
+    return Math.min(times * 200, 1000);
+  }
+});
+
+let redisConnected = false;
+
+redis.on('connect', () => {
+  console.log('✅ Redis connected - caching enabled');
+  redisConnected = true;
+});
+
+redis.on('error', (err) => {
+  if (redisConnected) {
+    console.log('⚠️ Redis error:', err.message);
+  }
+  redisConnected = false;
+});
+
+// Cache configuration
+const CACHE_TTL = 300; // 5 minutes TTL for candle data
+const CACHE_PREFIX = 'trading:';
+
+// =============================================================================
+// REDIS CACHE HELPERS
+// =============================================================================
+
+async function getCachedCandles(instrument, timeframe) {
+  if (!redisConnected) return null;
+
+  try {
+    const key = `${CACHE_PREFIX}candles:${instrument}:${timeframe}`;
+    const data = await redis.get(key);
+    if (data) {
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Redis get error:', err.message);
+  }
+  return null;
+}
+
+async function setCachedCandles(instrument, timeframe, candles) {
+  if (!redisConnected) return;
+
+  try {
+    const key = `${CACHE_PREFIX}candles:${instrument}:${timeframe}`;
+    await redis.setex(key, CACHE_TTL, JSON.stringify(candles));
+  } catch (err) {
+    console.error('Redis set error:', err.message);
+  }
+}
+
+async function loadAllFromCache() {
+  if (!redisConnected) {
+    console.log('⚠️ Redis not connected - skipping cache load');
+    return false;
+  }
+
+  console.log('📦 Loading data from Redis cache...');
+  let loadedCount = 0;
+
+  for (const instrument of CONFIG.INSTRUMENTS) {
+    const displayName = CONFIG.INSTRUMENT_DISPLAY[instrument];
+
+    for (const tf of CONFIG.TIMEFRAMES) {
+      const cached = await getCachedCandles(instrument, tf);
+      if (cached && cached.length > 0) {
+        const key = `${displayName}_${tf}`;
+        dataStore.candles[key] = cached;
+
+        // Recalculate patterns for cached data
+        if (cached.length >= 3) {
+          const latestCandle = cached[cached.length - 1];
+          const patterns = PatternRecognizer.analyzeCandle(latestCandle, cached.length - 1, cached);
+          dataStore.patterns[key] = patterns;
+          dataStore.decisions[key] = PatternRecognizer.generateDecision(patterns, latestCandle, cached);
+        }
+        loadedCount++;
+      }
+    }
+  }
+
+  if (loadedCount > 0) {
+    console.log(`✅ Loaded ${loadedCount} cached datasets from Redis`);
+    return true;
+  }
+
+  console.log('📭 No cached data found in Redis');
+  return false;
+}
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static('client/dist'));
@@ -26,9 +128,9 @@ const CONFIG = {
   // Top 10 crypto trading pairs
   INSTRUMENTS: [
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT',
-    'SOLUSDT', 'DOGEUSDT', 'DOTUSDT', 'MATICUSDT', 'LTCUSDT'
+    'SOLUSDT', 'DOGEUSDT', 'DOTUSDT', 'POLUSDT', 'LTCUSDT'
   ],
-  // Display names mapping
+  // Display names mapping (POL was formerly MATIC - rebranded Sept 2024)
   INSTRUMENT_DISPLAY: {
     'BTCUSDT': 'BTC_USDT',
     'ETHUSDT': 'ETH_USDT',
@@ -38,7 +140,7 @@ const CONFIG = {
     'SOLUSDT': 'SOL_USDT',
     'DOGEUSDT': 'DOGE_USDT',
     'DOTUSDT': 'DOT_USDT',
-    'MATICUSDT': 'MATIC_USDT',
+    'POLUSDT': 'POL_USDT',
     'LTCUSDT': 'LTC_USDT'
   },
   // Symbol mappings for each exchange
@@ -48,7 +150,7 @@ const CONFIG = {
     'SOL_USDT': 'SOL-USD',
     'DOGE_USDT': 'DOGE-USD',
     'DOT_USDT': 'DOT-USD',
-    'MATIC_USDT': 'MATIC-USD',
+    'POL_USDT': 'POL-USD',
     'LTC_USDT': 'LTC-USD',
     'XRP_USDT': 'XRP-USD',
     'ADA_USDT': 'ADA-USD'
@@ -60,7 +162,7 @@ const CONFIG = {
     'SOL_USDT': 'SOL/USD',
     'DOGE_USDT': 'DOGE/USD',
     'DOT_USDT': 'DOT/USD',
-    'MATIC_USDT': 'MATIC/USD',
+    'POL_USDT': 'POL/USD',
     'LTC_USDT': 'LTC/USD',
     'XRP_USDT': 'XRP/USD',
     'ADA_USDT': 'ADA/USD'
@@ -804,16 +906,54 @@ function httpsGet(url) {
 }
 
 async function fetchAllHistoricalData() {
-  console.log('📥 Fetching historical candle data...');
+  const startTime = Date.now();
 
-  for (const instrument of CONFIG.INSTRUMENTS) {
-    for (const tf of CONFIG.TIMEFRAMES) {
-      await fetchHistoricalCandles(instrument, tf);
-      await new Promise(resolve => setTimeout(resolve, 100));
+  // Step 1: Try to load from Redis cache first (instant)
+  const cacheLoaded = await loadAllFromCache();
+
+  if (cacheLoaded) {
+    // Background refresh: fetch fresh data without blocking
+    console.log('🔄 Refreshing data from API in background...');
+    fetchFreshDataInBackground();
+    return;
+  }
+
+  // Step 2: No cache - fetch from API with parallel requests
+  console.log('📥 Fetching historical candle data from API...');
+
+  // Fetch all instruments in parallel (5 at a time to avoid rate limits)
+  const batchSize = 5;
+  for (let i = 0; i < CONFIG.INSTRUMENTS.length; i += batchSize) {
+    const batch = CONFIG.INSTRUMENTS.slice(i, i + batchSize);
+    const promises = [];
+
+    for (const instrument of batch) {
+      for (const tf of CONFIG.TIMEFRAMES) {
+        promises.push(fetchHistoricalCandles(instrument, tf));
+      }
+    }
+
+    await Promise.all(promises);
+    // Small delay between batches to respect rate limits
+    if (i + batchSize < CONFIG.INSTRUMENTS.length) {
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
   }
 
-  console.log('✅ Historical data loaded');
+  const elapsed = Date.now() - startTime;
+  console.log(`✅ Historical data loaded in ${elapsed}ms`);
+}
+
+async function fetchFreshDataInBackground() {
+  // Fetch fresh data in background without blocking
+  for (const instrument of CONFIG.INSTRUMENTS) {
+    for (const tf of CONFIG.TIMEFRAMES) {
+      fetchHistoricalCandles(instrument, tf).catch(() => {});
+    }
+    // Small delay between instruments
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  console.log('✅ Background data refresh complete');
 }
 
 async function fetchHistoricalCandles(instrument, timeframe) {
@@ -845,13 +985,16 @@ async function fetchHistoricalCandles(instrument, timeframe) {
           dataStore.patterns[key] = patterns;
           dataStore.decisions[key] = PatternRecognizer.generateDecision(patterns, latestCandle, candles);
         }
+
+        // Cache to Redis
+        setCachedCandles(instrument, timeframe, candles);
       }
 
       return candles;
     }
     return [];
   } catch (err) {
-    console.error(`Error fetching historical data for ${instrument} ${timeframe}:`, err.message);
+    console.error(`Error fetching ${instrument} ${timeframe}:`, err.message);
     return [];
   }
 }
@@ -929,6 +1072,7 @@ process.on('SIGINT', () => {
   if (binanceWs) binanceWs.close();
   if (coinbaseWs) coinbaseWs.close();
   if (krakenWs) krakenWs.close();
+  if (redisConnected) redis.quit();
   wss.close();
   server.close();
   process.exit(0);
