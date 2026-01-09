@@ -1,7 +1,7 @@
 /**
  * Trading Decision Framework - Backend Server
- * 
- * Connects to Crypto.com WebSocket for real-time futures data
+ *
+ * Multi-Exchange Price Aggregation: Binance + Coinbase + Kraken
  * Performs pattern recognition and broadcasts decisions to clients
  */
 
@@ -21,22 +21,12 @@ const server = http.createServer(app);
 // WebSocket server for clients
 const wss = new WebSocket.Server({ server });
 
-// Configuration - Using Binance public WebSocket (more reliable, no auth required)
+// Configuration
 const CONFIG = {
-  // Binance public WebSocket for market data
-  WS_URL: 'wss://stream.binance.com:9443/ws',
   // Top 10 crypto trading pairs
   INSTRUMENTS: [
-    'BTCUSDT',   // Bitcoin
-    'ETHUSDT',   // Ethereum
-    'BNBUSDT',   // Binance Coin
-    'XRPUSDT',   // Ripple
-    'ADAUSDT',   // Cardano
-    'SOLUSDT',   // Solana
-    'DOGEUSDT',  // Dogecoin
-    'DOTUSDT',   // Polkadot
-    'MATICUSDT', // Polygon
-    'LTCUSDT'    // Litecoin
+    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT',
+    'SOLUSDT', 'DOGEUSDT', 'DOTUSDT', 'MATICUSDT', 'LTCUSDT'
   ],
   // Display names mapping
   INSTRUMENT_DISPLAY: {
@@ -51,28 +41,51 @@ const CONFIG = {
     'MATICUSDT': 'MATIC_USDT',
     'LTCUSDT': 'LTC_USDT'
   },
-  TIMEFRAMES: ['1m', '5m', '15m', '1h', '4h'],
-  // Binance timeframe mapping
-  TIMEFRAME_MAP: {
-    '1m': '1m',
-    '5m': '5m',
-    '15m': '15m',
-    '1h': '1h',
-    '4h': '4h'
+  // Symbol mappings for each exchange
+  COINBASE_SYMBOLS: {
+    'BTC_USDT': 'BTC-USD',
+    'ETH_USDT': 'ETH-USD',
+    'SOL_USDT': 'SOL-USD',
+    'DOGE_USDT': 'DOGE-USD',
+    'DOT_USDT': 'DOT-USD',
+    'MATIC_USDT': 'MATIC-USD',
+    'LTC_USDT': 'LTC-USD',
+    'XRP_USDT': 'XRP-USD',
+    'ADA_USDT': 'ADA-USD'
+    // Note: BNB not available on Coinbase
   },
+  KRAKEN_SYMBOLS: {
+    'BTC_USDT': 'XBT/USD',
+    'ETH_USDT': 'ETH/USD',
+    'SOL_USDT': 'SOL/USD',
+    'DOGE_USDT': 'DOGE/USD',
+    'DOT_USDT': 'DOT/USD',
+    'MATIC_USDT': 'MATIC/USD',
+    'LTC_USDT': 'LTC/USD',
+    'XRP_USDT': 'XRP/USD',
+    'ADA_USDT': 'ADA/USD'
+    // Note: BNB not available on Kraken
+  },
+  TIMEFRAMES: ['1m', '5m', '15m', '1h', '4h'],
   RECONNECT_DELAY: 5000,
   MAX_RECONNECT_ATTEMPTS: 10,
 };
 
-// Store for candle data and patterns
+// Store for candle data, patterns, and multi-exchange prices
 const dataStore = {
-  candles: {},      // { 'BTC_USDT_1h': [...candles] }
-  patterns: {},     // { 'BTC_USDT_1h': [...patterns] }
-  decisions: {},    // { 'BTC_USDT_1h': decision }
-  tickers: {},      // { 'BTC_USDT': { price, change, volume } }
+  candles: {},
+  patterns: {},
+  decisions: {},
+  tickers: {},
+  // Per-exchange prices for aggregation
+  exchangePrices: {
+    binance: {},
+    coinbase: {},
+    kraken: {}
+  }
 };
 
-// Initialize data store using display names
+// Initialize data store
 CONFIG.INSTRUMENTS.forEach(instrument => {
   const displayName = CONFIG.INSTRUMENT_DISPLAY[instrument];
   CONFIG.TIMEFRAMES.forEach(tf => {
@@ -81,8 +94,78 @@ CONFIG.INSTRUMENTS.forEach(instrument => {
     dataStore.patterns[key] = [];
     dataStore.decisions[key] = null;
   });
-  dataStore.tickers[displayName] = { price: 0, change: 0, volume: 0 };
+  dataStore.tickers[displayName] = {
+    price: 0,
+    binancePrice: 0,
+    coinbasePrice: 0,
+    krakenPrice: 0,
+    change: 0,
+    high24h: 0,
+    low24h: 0,
+    volume: 0,
+    sources: []
+  };
+  dataStore.exchangePrices.binance[displayName] = 0;
+  dataStore.exchangePrices.coinbase[displayName] = 0;
+  dataStore.exchangePrices.kraken[displayName] = 0;
 });
+
+// =============================================================================
+// PRICE AGGREGATION
+// =============================================================================
+
+function calculateAggregatedPrice(displayName) {
+  const binancePrice = dataStore.exchangePrices.binance[displayName] || 0;
+  const coinbasePrice = dataStore.exchangePrices.coinbase[displayName] || 0;
+  const krakenPrice = dataStore.exchangePrices.kraken[displayName] || 0;
+
+  const prices = [];
+  const sources = [];
+
+  if (binancePrice > 0) {
+    prices.push(binancePrice);
+    sources.push('Binance');
+  }
+  if (coinbasePrice > 0) {
+    prices.push(coinbasePrice);
+    sources.push('Coinbase');
+  }
+  if (krakenPrice > 0) {
+    prices.push(krakenPrice);
+    sources.push('Kraken');
+  }
+
+  if (prices.length === 0) return { price: 0, sources: [] };
+
+  // Calculate weighted average (equal weights for now)
+  const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
+
+  return {
+    price: parseFloat(avgPrice.toFixed(8)),
+    sources,
+    binancePrice,
+    coinbasePrice,
+    krakenPrice
+  };
+}
+
+function updateAggregatedTicker(displayName) {
+  const aggregated = calculateAggregatedPrice(displayName);
+  const ticker = dataStore.tickers[displayName];
+
+  if (aggregated.price > 0) {
+    ticker.price = aggregated.price;
+    ticker.binancePrice = aggregated.binancePrice;
+    ticker.coinbasePrice = aggregated.coinbasePrice;
+    ticker.krakenPrice = aggregated.krakenPrice;
+    ticker.sources = aggregated.sources;
+
+    broadcastToClients('ticker', {
+      instrument: displayName,
+      ...ticker
+    });
+  }
+}
 
 // =============================================================================
 // PATTERN RECOGNITION ENGINE
@@ -91,19 +174,19 @@ CONFIG.INSTRUMENTS.forEach(instrument => {
 class PatternRecognizer {
   static analyzeCandle(candle, index, allCandles) {
     const patterns = [];
-    
+
     const open = parseFloat(candle.o);
     const high = parseFloat(candle.h);
     const low = parseFloat(candle.l);
     const close = parseFloat(candle.c);
     const volume = parseFloat(candle.v);
-    
+
     const bodySize = Math.abs(close - open);
     const upperWick = high - Math.max(open, close);
     const lowerWick = Math.min(open, close) - low;
     const totalRange = high - low;
     const isBullish = close > open;
-    
+
     if (totalRange === 0) return patterns;
 
     // Doji patterns
@@ -138,7 +221,7 @@ class PatternRecognizer {
         const prevCandles = allCandles.slice(Math.max(0, index - 3), index);
         const avgClose = prevCandles.reduce((sum, c) => sum + parseFloat(c.c), 0) / prevCandles.length;
         const isDowntrend = close < avgClose;
-        
+
         if (isDowntrend) {
           patterns.push({
             name: 'Hammer',
@@ -163,7 +246,7 @@ class PatternRecognizer {
         const prevCandles = allCandles.slice(Math.max(0, index - 3), index);
         const avgClose = prevCandles.reduce((sum, c) => sum + parseFloat(c.c), 0) / prevCandles.length;
         const isUptrend = close > avgClose;
-        
+
         if (isUptrend) {
           patterns.push({
             name: 'Shooting Star',
@@ -188,7 +271,7 @@ class PatternRecognizer {
         name: isBullish ? 'Bullish Marubozu' : 'Bearish Marubozu',
         type: isBullish ? 'bullish' : 'bearish',
         strength: 'strong',
-        description: isBullish 
+        description: isBullish
           ? 'Strong buying pressure - bulls in full control'
           : 'Strong selling pressure - bears in full control'
       });
@@ -226,15 +309,14 @@ class PatternRecognizer {
     if (index >= 2) {
       const candle1 = allCandles[index - 2];
       const candle2 = allCandles[index - 1];
-      const candle3 = candle;
-      
+
       const c1Body = Math.abs(parseFloat(candle1.c) - parseFloat(candle1.o));
       const c2Body = Math.abs(parseFloat(candle2.c) - parseFloat(candle2.o));
       const c3Body = bodySize;
-      
+
       const c1Bearish = parseFloat(candle1.c) < parseFloat(candle1.o);
       const c3Bullish = isBullish;
-      
+
       if (c1Bearish && c2Body < c1Body * 0.3 && c3Bullish && c3Body > c1Body * 0.5) {
         patterns.push({
           name: 'Morning Star',
@@ -249,15 +331,14 @@ class PatternRecognizer {
     if (index >= 2) {
       const candle1 = allCandles[index - 2];
       const candle2 = allCandles[index - 1];
-      const candle3 = candle;
-      
+
       const c1Body = Math.abs(parseFloat(candle1.c) - parseFloat(candle1.o));
       const c2Body = Math.abs(parseFloat(candle2.c) - parseFloat(candle2.o));
       const c3Body = bodySize;
-      
+
       const c1Bullish = parseFloat(candle1.c) > parseFloat(candle1.o);
       const c3Bearish = !isBullish;
-      
+
       if (c1Bullish && c2Body < c1Body * 0.3 && c3Bearish && c3Body > c1Body * 0.5) {
         patterns.push({
           name: 'Evening Star',
@@ -272,7 +353,7 @@ class PatternRecognizer {
     if (index >= 5) {
       const recentVolumes = allCandles.slice(index - 5, index).map(c => parseFloat(c.v));
       const avgVolume = recentVolumes.reduce((a, b) => a + b, 0) / 5;
-      
+
       if (volume > avgVolume * 2) {
         patterns.push({
           name: 'High Volume',
@@ -300,10 +381,8 @@ class PatternRecognizer {
       };
     }
 
-    const open = parseFloat(candle.o);
     const high = parseFloat(candle.h);
     const low = parseFloat(candle.l);
-    const close = parseFloat(candle.c);
     const range = high - low;
 
     const strongBullish = patterns.some(p => p.type === 'bullish' && p.strength === 'strong');
@@ -387,181 +466,258 @@ class PatternRecognizer {
 // BINANCE WEBSOCKET CONNECTION
 // =============================================================================
 
-let exchangeWs = null;
-let reconnectTimeout = null;
-let reconnectAttempts = 0;
+let binanceWs = null;
+let binanceReconnectTimeout = null;
 
-function buildStreamUrl() {
-  // Build combined stream URL for all instruments and timeframes
+function connectToBinance() {
+  console.log('🔌 Connecting to Binance WebSocket...');
+
   const streams = [];
-
   CONFIG.INSTRUMENTS.forEach(instrument => {
     const symbol = instrument.toLowerCase();
-    // Add ticker stream
     streams.push(`${symbol}@ticker`);
-    // Add kline streams for each timeframe
     CONFIG.TIMEFRAMES.forEach(tf => {
       streams.push(`${symbol}@kline_${tf}`);
     });
   });
 
-  return `wss://stream.binance.com:9443/stream?streams=${streams.join('/')}`;
-}
+  const streamUrl = `wss://stream.binance.com:9443/stream?streams=${streams.join('/')}`;
+  binanceWs = new WebSocket(streamUrl);
 
-function connectToExchange() {
-  console.log('🔌 Connecting to Binance WebSocket...');
-
-  const streamUrl = buildStreamUrl();
-  exchangeWs = new WebSocket(streamUrl);
-
-  exchangeWs.on('open', () => {
-    console.log('✅ Connected to Binance');
-    console.log('📊 Subscribed to all instruments and timeframes');
-    reconnectAttempts = 0;
-
-    // Fetch initial historical data for all instruments/timeframes
+  binanceWs.on('open', () => {
+    console.log('✅ Binance connected');
     fetchAllHistoricalData();
   });
 
-  exchangeWs.on('message', (data) => {
+  binanceWs.on('message', (data) => {
     try {
       const message = JSON.parse(data.toString());
-      handleExchangeMessage(message);
+      handleBinanceMessage(message);
     } catch (err) {
-      console.error('Error parsing message:', err);
+      console.error('Binance parse error:', err.message);
     }
   });
 
-  exchangeWs.on('error', (error) => {
-    console.error('❌ Binance WebSocket error:', error.message);
+  binanceWs.on('error', (error) => {
+    console.error('❌ Binance error:', error.message);
   });
 
-  exchangeWs.on('close', () => {
-    console.log('🔌 Binance connection closed. Reconnecting...');
-    scheduleReconnect();
+  binanceWs.on('close', () => {
+    console.log('🔌 Binance disconnected. Reconnecting...');
+    if (binanceReconnectTimeout) clearTimeout(binanceReconnectTimeout);
+    binanceReconnectTimeout = setTimeout(connectToBinance, CONFIG.RECONNECT_DELAY);
   });
 }
 
-function scheduleReconnect() {
-  if (reconnectTimeout) clearTimeout(reconnectTimeout);
-  reconnectAttempts++;
-
-  if (reconnectAttempts > CONFIG.MAX_RECONNECT_ATTEMPTS) {
-    console.error('❌ Max reconnection attempts reached. Please check your network connection.');
-    return;
-  }
-
-  const delay = CONFIG.RECONNECT_DELAY * Math.min(reconnectAttempts, 5);
-  console.log(`⏳ Reconnecting in ${delay/1000}s (attempt ${reconnectAttempts}/${CONFIG.MAX_RECONNECT_ATTEMPTS})...`);
-  reconnectTimeout = setTimeout(connectToExchange, delay);
-}
-
-async function fetchAllHistoricalData() {
-  console.log('📥 Fetching historical candle data...');
-
-  for (const instrument of CONFIG.INSTRUMENTS) {
-    for (const tf of CONFIG.TIMEFRAMES) {
-      await fetchHistoricalCandles(instrument, tf);
-      // Small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-  }
-
-  console.log('✅ Historical data loaded');
-}
-
-function handleExchangeMessage(message) {
+function handleBinanceMessage(message) {
   if (!message.stream || !message.data) return;
 
   const stream = message.stream;
   const data = message.data;
 
-  // Handle ticker updates (e.g., btcusdt@ticker)
   if (stream.endsWith('@ticker')) {
-    const symbol = data.s; // e.g., 'BTCUSDT'
+    const symbol = data.s;
     const displayName = CONFIG.INSTRUMENT_DISPLAY[symbol];
 
-    if (displayName && dataStore.tickers[displayName]) {
-      dataStore.tickers[displayName] = {
-        price: parseFloat(data.c) || 0, // Current price
-        high24h: parseFloat(data.h) || 0,
-        low24h: parseFloat(data.l) || 0,
-        volume: parseFloat(data.v) || 0,
-        change: parseFloat(data.P) || 0, // 24h change percentage
-        timestamp: data.E
-      };
-      broadcastToClients('ticker', { instrument: displayName, ...dataStore.tickers[displayName] });
+    if (displayName) {
+      const price = parseFloat(data.c) || 0;
+      dataStore.exchangePrices.binance[displayName] = price;
+
+      // Store additional data from Binance (it has the most complete data)
+      const ticker = dataStore.tickers[displayName];
+      ticker.high24h = parseFloat(data.h) || 0;
+      ticker.low24h = parseFloat(data.l) || 0;
+      ticker.volume = parseFloat(data.v) || 0;
+      ticker.change = parseFloat(data.P) || 0;
+
+      updateAggregatedTicker(displayName);
     }
   }
 
-  // Handle kline/candlestick updates (e.g., btcusdt@kline_1h)
   if (stream.includes('@kline_')) {
-    const symbol = data.s; // e.g., 'BTCUSDT'
+    const symbol = data.s;
     const displayName = CONFIG.INSTRUMENT_DISPLAY[symbol];
     const kline = data.k;
-    const timeframe = kline.i; // e.g., '1h'
+    const timeframe = kline.i;
     const key = `${displayName}_${timeframe}`;
 
     if (displayName && dataStore.candles[key] !== undefined) {
-      // Convert Binance kline format to our candle format
       const candle = {
-        t: kline.t, // Open time
-        o: kline.o, // Open
-        h: kline.h, // High
-        l: kline.l, // Low
-        c: kline.c, // Close
-        v: kline.v, // Volume
-        T: kline.T, // Close time
-        isClosed: kline.x // Is this kline closed?
+        t: kline.t,
+        o: kline.o,
+        h: kline.h,
+        l: kline.l,
+        c: kline.c,
+        v: kline.v,
+        T: kline.T,
+        isClosed: kline.x
       };
 
       const existingIndex = dataStore.candles[key].findIndex(c => c.t === candle.t);
 
       if (existingIndex >= 0) {
-        // Update existing candle
         dataStore.candles[key][existingIndex] = candle;
       } else {
-        // Add new candle
         dataStore.candles[key].push(candle);
-        // Keep last 100 candles
         if (dataStore.candles[key].length > 100) {
           dataStore.candles[key].shift();
         }
       }
 
-      // Sort by timestamp
       dataStore.candles[key].sort((a, b) => a.t - b.t);
 
-      // Analyze patterns on latest candles
       const allCandles = dataStore.candles[key];
       if (allCandles.length >= 3) {
         const latestCandle = allCandles[allCandles.length - 1];
-        const patterns = PatternRecognizer.analyzeCandle(
-          latestCandle,
-          allCandles.length - 1,
-          allCandles
-        );
-
+        const patterns = PatternRecognizer.analyzeCandle(latestCandle, allCandles.length - 1, allCandles);
         dataStore.patterns[key] = patterns;
+        dataStore.decisions[key] = PatternRecognizer.generateDecision(patterns, latestCandle, allCandles);
 
-        const decision = PatternRecognizer.generateDecision(
-          patterns,
-          latestCandle,
-          allCandles
-        );
-        dataStore.decisions[key] = decision;
-
-        // Broadcast update
         broadcastToClients('candle_update', {
           instrument: displayName,
           timeframe,
           candle: latestCandle,
           patterns,
-          decision,
-          allCandles: allCandles.slice(-50) // Send last 50 candles
+          decision: dataStore.decisions[key],
+          allCandles: allCandles.slice(-50)
         });
       }
     }
+  }
+}
+
+// =============================================================================
+// COINBASE WEBSOCKET CONNECTION
+// =============================================================================
+
+let coinbaseWs = null;
+let coinbaseReconnectTimeout = null;
+
+function connectToCoinbase() {
+  console.log('🔌 Connecting to Coinbase WebSocket...');
+
+  coinbaseWs = new WebSocket('wss://ws-feed.exchange.coinbase.com');
+
+  coinbaseWs.on('open', () => {
+    console.log('✅ Coinbase connected');
+
+    // Subscribe to ticker channel
+    const productIds = Object.values(CONFIG.COINBASE_SYMBOLS);
+    coinbaseWs.send(JSON.stringify({
+      type: 'subscribe',
+      product_ids: productIds,
+      channels: ['ticker']
+    }));
+  });
+
+  coinbaseWs.on('message', (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      handleCoinbaseMessage(message);
+    } catch (err) {
+      console.error('Coinbase parse error:', err.message);
+    }
+  });
+
+  coinbaseWs.on('error', (error) => {
+    console.error('❌ Coinbase error:', error.message);
+  });
+
+  coinbaseWs.on('close', () => {
+    console.log('🔌 Coinbase disconnected. Reconnecting...');
+    if (coinbaseReconnectTimeout) clearTimeout(coinbaseReconnectTimeout);
+    coinbaseReconnectTimeout = setTimeout(connectToCoinbase, CONFIG.RECONNECT_DELAY);
+  });
+}
+
+function handleCoinbaseMessage(message) {
+  if (message.type !== 'ticker') return;
+
+  const productId = message.product_id;
+
+  // Find the display name for this product
+  let displayName = null;
+  for (const [display, coinbaseSymbol] of Object.entries(CONFIG.COINBASE_SYMBOLS)) {
+    if (coinbaseSymbol === productId) {
+      displayName = display;
+      break;
+    }
+  }
+
+  if (displayName && message.price) {
+    const price = parseFloat(message.price) || 0;
+    dataStore.exchangePrices.coinbase[displayName] = price;
+    updateAggregatedTicker(displayName);
+  }
+}
+
+// =============================================================================
+// KRAKEN WEBSOCKET CONNECTION
+// =============================================================================
+
+let krakenWs = null;
+let krakenReconnectTimeout = null;
+
+function connectToKraken() {
+  console.log('🔌 Connecting to Kraken WebSocket...');
+
+  krakenWs = new WebSocket('wss://ws.kraken.com');
+
+  krakenWs.on('open', () => {
+    console.log('✅ Kraken connected');
+
+    // Subscribe to ticker channel
+    const pairs = Object.values(CONFIG.KRAKEN_SYMBOLS);
+    krakenWs.send(JSON.stringify({
+      event: 'subscribe',
+      pair: pairs,
+      subscription: { name: 'ticker' }
+    }));
+  });
+
+  krakenWs.on('message', (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      handleKrakenMessage(message);
+    } catch (err) {
+      console.error('Kraken parse error:', err.message);
+    }
+  });
+
+  krakenWs.on('error', (error) => {
+    console.error('❌ Kraken error:', error.message);
+  });
+
+  krakenWs.on('close', () => {
+    console.log('🔌 Kraken disconnected. Reconnecting...');
+    if (krakenReconnectTimeout) clearTimeout(krakenReconnectTimeout);
+    krakenReconnectTimeout = setTimeout(connectToKraken, CONFIG.RECONNECT_DELAY);
+  });
+}
+
+function handleKrakenMessage(message) {
+  // Kraken sends arrays for ticker data: [channelID, data, channelName, pair]
+  if (!Array.isArray(message) || message.length < 4) return;
+
+  const tickerData = message[1];
+  const pair = message[3];
+
+  if (!tickerData || !tickerData.c) return;
+
+  // Find the display name for this pair
+  let displayName = null;
+  for (const [display, krakenSymbol] of Object.entries(CONFIG.KRAKEN_SYMBOLS)) {
+    if (krakenSymbol === pair) {
+      displayName = display;
+      break;
+    }
+  }
+
+  if (displayName) {
+    // Kraken ticker format: c = close [price, lot volume]
+    const price = parseFloat(tickerData.c[0]) || 0;
+    dataStore.exchangePrices.kraken[displayName] = price;
+    updateAggregatedTicker(displayName);
   }
 }
 
@@ -575,7 +731,6 @@ wss.on('connection', (ws) => {
   console.log('👤 Client connected');
   clients.add(ws);
 
-  // Send current state to new client
   ws.send(JSON.stringify({
     type: 'init',
     data: {
@@ -604,7 +759,6 @@ wss.on('connection', (ws) => {
 function handleClientMessage(ws, data) {
   switch (data.type) {
     case 'subscribe':
-      // Client wants specific instrument/timeframe
       const key = `${data.instrument}_${data.timeframe}`;
       ws.send(JSON.stringify({
         type: 'candle_update',
@@ -616,17 +770,6 @@ function handleClientMessage(ws, data) {
           decision: dataStore.decisions[key]
         }
       }));
-      break;
-      
-    case 'get_history':
-      // Fetch historical data via REST
-      fetchHistoricalCandles(data.instrument, data.timeframe)
-        .then(candles => {
-          ws.send(JSON.stringify({
-            type: 'history',
-            data: { instrument: data.instrument, timeframe: data.timeframe, candles }
-          }));
-        });
       break;
   }
 }
@@ -644,7 +787,6 @@ function broadcastToClients(type, data) {
 // REST API FOR HISTORICAL DATA
 // =============================================================================
 
-// Helper function to make HTTPS GET requests (compatible with Node.js 14)
 function httpsGet(url) {
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
@@ -661,6 +803,19 @@ function httpsGet(url) {
   });
 }
 
+async function fetchAllHistoricalData() {
+  console.log('📥 Fetching historical candle data...');
+
+  for (const instrument of CONFIG.INSTRUMENTS) {
+    for (const tf of CONFIG.TIMEFRAMES) {
+      await fetchHistoricalCandles(instrument, tf);
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+
+  console.log('✅ Historical data loaded');
+}
+
 async function fetchHistoricalCandles(instrument, timeframe) {
   try {
     const displayName = CONFIG.INSTRUMENT_DISPLAY[instrument];
@@ -670,30 +825,23 @@ async function fetchHistoricalCandles(instrument, timeframe) {
     const data = await httpsGet(url);
 
     if (Array.isArray(data)) {
-      // Convert Binance kline array format to our candle format
       const candles = data.map(k => ({
-        t: k[0],    // Open time
-        o: k[1],    // Open
-        h: k[2],    // High
-        l: k[3],    // Low
-        c: k[4],    // Close
-        v: k[5],    // Volume
-        T: k[6],    // Close time
+        t: k[0],
+        o: k[1],
+        h: k[2],
+        l: k[3],
+        c: k[4],
+        v: k[5],
+        T: k[6],
         isClosed: true
       }));
 
-      // Store in dataStore
       if (dataStore.candles[key] !== undefined) {
         dataStore.candles[key] = candles;
 
-        // Analyze patterns for the latest candle
         if (candles.length >= 3) {
           const latestCandle = candles[candles.length - 1];
-          const patterns = PatternRecognizer.analyzeCandle(
-            latestCandle,
-            candles.length - 1,
-            candles
-          );
+          const patterns = PatternRecognizer.analyzeCandle(latestCandle, candles.length - 1, candles);
           dataStore.patterns[key] = patterns;
           dataStore.decisions[key] = PatternRecognizer.generateDecision(patterns, latestCandle, candles);
         }
@@ -710,15 +858,13 @@ async function fetchHistoricalCandles(instrument, timeframe) {
 
 // REST endpoints
 app.get('/api/instruments', (req, res) => {
-  // Return display names (BTC_USDT format)
   res.json(Object.values(CONFIG.INSTRUMENT_DISPLAY));
 });
 
 app.get('/api/candles/:instrument/:timeframe', async (req, res) => {
   const { instrument, timeframe } = req.params;
   const key = `${instrument}_${timeframe}`;
-  
-  // Return cached data or fetch fresh
+
   if (dataStore.candles[key] && dataStore.candles[key].length > 0) {
     res.json({
       candles: dataStore.candles[key],
@@ -739,7 +885,11 @@ app.get('/api/tickers', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    exchangeConnected: exchangeWs?.readyState === WebSocket.OPEN,
+    exchanges: {
+      binance: binanceWs?.readyState === WebSocket.OPEN,
+      coinbase: coinbaseWs?.readyState === WebSocket.OPEN,
+      kraken: krakenWs?.readyState === WebSocket.OPEN
+    },
     clients: clients.size
   });
 });
@@ -762,18 +912,23 @@ server.listen(PORT, () => {
 ║  Instruments:  Top 10 Pairs (USDT)                            ║
 ║  BTC, ETH, BNB, XRP, ADA, SOL, DOGE, DOT, MATIC, LTC          ║
 ║  Timeframes:   1m, 5m, 15m, 1h, 4h                            ║
-║  Data Source:  Binance Public API                             ║
+╠═══════════════════════════════════════════════════════════════╣
+║  Data Sources: Binance + Coinbase + Kraken (Aggregated)       ║
 ╚═══════════════════════════════════════════════════════════════╝
   `);
 
-  // Connect to Binance
-  connectToExchange();
+  // Connect to all exchanges
+  connectToBinance();
+  connectToCoinbase();
+  connectToKraken();
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down...');
-  if (exchangeWs) exchangeWs.close();
+  if (binanceWs) binanceWs.close();
+  if (coinbaseWs) coinbaseWs.close();
+  if (krakenWs) krakenWs.close();
   wss.close();
   server.close();
   process.exit(0);
