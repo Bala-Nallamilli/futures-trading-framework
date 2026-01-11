@@ -1,7 +1,8 @@
 import React from 'react';
 
 export function TickerBar({ tickers, selectedInstrument, onSelect }) {
-  const instruments = ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'SUI_USDT'];
+  // Get all available instruments from the tickers object
+  const instruments = Object.keys(tickers).filter(key => tickers[key]?.price > 0);
 
   const formatPrice = (price, instrument) => {
     if (!price) return '-';
@@ -14,6 +15,22 @@ export function TickerBar({ tickers, selectedInstrument, onSelect }) {
     if (!change && change !== 0) return '-';
     const prefix = change >= 0 ? '+' : '';
     return `${prefix}${change.toFixed(2)}%`;
+  };
+
+  const getCoinColor = (symbol) => {
+    const colors = {
+      'BTC': 'bg-orange-500/20 text-orange-400',
+      'ETH': 'bg-blue-500/20 text-blue-400',
+      'BNB': 'bg-yellow-500/20 text-yellow-400',
+      'XRP': 'bg-slate-500/20 text-slate-400',
+      'ADA': 'bg-blue-600/20 text-blue-400',
+      'SOL': 'bg-purple-500/20 text-purple-400',
+      'DOGE': 'bg-yellow-600/20 text-yellow-500',
+      'DOT': 'bg-pink-500/20 text-pink-400',
+      'POL': 'bg-purple-600/20 text-purple-500',
+      'LTC': 'bg-gray-500/20 text-gray-400',
+    };
+    return colors[symbol] || 'bg-cyan-500/20 text-cyan-400';
   };
 
   return (
@@ -35,12 +52,7 @@ export function TickerBar({ tickers, selectedInstrument, onSelect }) {
             }`}
           >
             {/* Coin Icon */}
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-              symbol === 'BTC' ? 'bg-orange-500/20 text-orange-400' :
-              symbol === 'ETH' ? 'bg-blue-500/20 text-blue-400' :
-              symbol === 'SOL' ? 'bg-purple-500/20 text-purple-400' :
-              'bg-cyan-500/20 text-cyan-400'
-            }`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${getCoinColor(symbol)}`}>
               {symbol.charAt(0)}
             </div>
 

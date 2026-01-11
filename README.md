@@ -7,7 +7,9 @@ Real-time cryptocurrency trading analysis platform with pattern recognition and 
 
 ## Features
 
-- **Real-time Market Data** - Live price feeds from Binance WebSocket API
+- **Multi-Exchange Price Aggregation** - Aggregated prices from Binance, Coinbase, and Kraken
+- **Real-time Market Data** - Live price feeds via WebSocket connections
+- **Optional Redis Caching** - Fast lazy loading with configurable caching layer
 - **Pattern Recognition** - Automatic candlestick pattern detection
   - Doji, Hammer, Shooting Star
   - Engulfing patterns (Bullish/Bearish)
@@ -29,6 +31,7 @@ The dashboard displays:
 
 - **Node.js 14+** (v18+ recommended for full features)
 - **npm** (comes with Node.js)
+- **Redis** (optional, for caching) - Install from https://redis.io or use Docker
 
 ## Quick Start
 
@@ -124,6 +127,20 @@ The system detects the following candlestick patterns:
 
 ## Configuration
 
+### Environment Variables
+
+Create a `.env` file in the root directory (use `.env.example` as a template):
+
+```bash
+# Server Configuration
+PORT=3001
+
+# Redis Caching (optional)
+USE_REDIS=false  # Set to 'true' to enable Redis caching for faster lazy loading
+```
+
+### Trading Pairs & Timeframes
+
 Edit `server.js` to customize:
 
 ```javascript
@@ -133,6 +150,40 @@ const CONFIG = {
   RECONNECT_DELAY: 5000,                       // WebSocket reconnect delay
 };
 ```
+
+### Redis Caching
+
+Redis caching is **disabled by default**. To enable it:
+
+1. Install and start Redis:
+   ```bash
+   # Using Docker
+   docker run -d -p 6379:6379 redis:latest
+
+   # Or install locally
+   # macOS: brew install redis && brew services start redis
+   # Ubuntu: sudo apt install redis-server && sudo systemctl start redis
+   ```
+
+2. Enable Redis in your environment:
+   ```bash
+   # Set in .env file
+   USE_REDIS=true
+
+   # Or set as environment variable
+   export USE_REDIS=true
+   npm start
+   ```
+
+**Benefits of Redis caching:**
+- Instant data loading from cache (< 100ms vs 2-3 seconds)
+- Reduces API calls to exchanges
+- Background refresh for fresh data
+
+**Running without Redis:**
+- Server works normally without Redis installed
+- Data is fetched directly from exchange APIs on startup
+- No caching layer, but still fully functional
 
 ## Troubleshooting
 

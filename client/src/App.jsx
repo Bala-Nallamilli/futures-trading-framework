@@ -4,6 +4,7 @@ import { CandlestickChart } from './components/CandlestickChart';
 import { DecisionPanel } from './components/DecisionPanel';
 import { TickerBar } from './components/TickerBar';
 import { TradingRules } from './components/TradingRules';
+import { MarketOverview } from './components/MarketOverview';
 
 function App() {
   const [selectedInstrument, setSelectedInstrument] = useState('BTC_USDT');
@@ -235,6 +236,15 @@ function App() {
           </div>
         </div>
 
+        {/* Market Overview Table */}
+        <div className="mt-6">
+          <MarketOverview
+            tickers={tickers}
+            selectedInstrument={selectedInstrument}
+            onSelect={setSelectedInstrument}
+          />
+        </div>
+
         {/* Trading Rules */}
         <div className="mt-6">
           <TradingRules />
@@ -243,7 +253,7 @@ function App() {
         {/* Disclaimer */}
         <div className="mt-6 text-center">
           <p className="text-xs text-gray-600">
-            ⚠️ This tool is for educational purposes only. Always do your own research. 
+            ⚠️ This tool is for educational purposes only. Always do your own research.
             Past patterns don't guarantee future results. Trade responsibly.
           </p>
         </div>
