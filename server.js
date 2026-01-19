@@ -128,7 +128,7 @@ const CONFIG = {
   // Top 10 crypto trading pairs
   INSTRUMENTS: [
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT',
-    'SOLUSDT', 'DOGEUSDT', 'DOTUSDT', 'POLUSDT', 'LTCUSDT'
+    'SOLUSDT', 'DOGEUSDT', 'DOTUSDT', 'POLUSDT', 'LTCUSDT','SUIUSDT'
   ],
   // Display names mapping (POL was formerly MATIC - rebranded Sept 2024)
   INSTRUMENT_DISPLAY: {
@@ -141,7 +141,8 @@ const CONFIG = {
     'DOGEUSDT': 'DOGE_USDT',
     'DOTUSDT': 'DOT_USDT',
     'POLUSDT': 'POL_USDT',
-    'LTCUSDT': 'LTC_USDT'
+    'LTCUSDT': 'LTC_USDT',
+    'SUIUSDT': 'SUI_USDT'
   },
   // Symbol mappings for each exchange
   COINBASE_SYMBOLS: {
@@ -153,7 +154,8 @@ const CONFIG = {
     'POL_USDT': 'POL-USD',
     'LTC_USDT': 'LTC-USD',
     'XRP_USDT': 'XRP-USD',
-    'ADA_USDT': 'ADA-USD'
+    'ADA_USDT': 'ADA-USD',
+    'SUI_USDT': 'SUI-USD'
     // Note: BNB not available on Coinbase
   },
   KRAKEN_SYMBOLS: {
@@ -165,7 +167,8 @@ const CONFIG = {
     'POL_USDT': 'POL/USD',
     'LTC_USDT': 'LTC/USD',
     'XRP_USDT': 'XRP/USD',
-    'ADA_USDT': 'ADA/USD'
+    'ADA_USDT': 'ADA/USD',
+    'SUI_USDT': 'SUI/USD'
     // Note: BNB not available on Kraken
   },
   TIMEFRAMES: ['1m', '5m', '15m', '1h', '4h'],
