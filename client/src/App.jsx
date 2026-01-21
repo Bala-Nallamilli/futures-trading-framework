@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
-import { CandlestickChart } from './components/CandlestickChart';
+import { TradingViewChart } from './components/TradingViewChart';
 import { DecisionPanel } from './components/DecisionPanel';
 import { TickerBar } from './components/TickerBar';
 import { TradingRules } from './components/TradingRules';
@@ -144,8 +144,8 @@ function App() {
               </div>
 
               {/* Chart */}
-              <div className="overflow-x-auto">
-                <CandlestickChart
+              <div className="w-full">
+                <TradingViewChart
                   candles={currentCandles}
                   patterns={currentPatterns}
                   decision={currentDecision}
